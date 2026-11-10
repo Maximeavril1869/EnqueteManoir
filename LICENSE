@@ -1,0 +1,10 @@
+Copyright (c) 2026 Maximeavril1869. Tous droits réservés.
+
+Ce logiciel, son code source, ses textes et ses graphismes sont la propriété exclusive
+de leur auteur. Aucune licence d'utilisation, de copie, de modification, de diffusion
+ou de revente n'est accordée sans autorisation écrite préalable de l'auteur.
+
+Composants tiers inclus dans js/vendor/ (ils conservent leur propre licence) :
+ - PeerJS 1.5.4 (licence MIT) — https://peerjs.com
+ - qrcode-generator 1.4.4 (licence MIT, Kazuhiko Arase) — https://github.com/kazuhikoarase/qrcode-generator
+ « QR Code » est une marque déposée de DENSO WAVE INCORPORATED.
