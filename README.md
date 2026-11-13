@@ -1,6 +1,6 @@
 # EnqueteManoir 🕵️
 
-Un jeu d'enquête de déduction pour **2 à 6 détectives**, qui tourne entièrement dans le navigateur (PWA pour iPad et iPhone, sans compte, sans serveur de jeu). Règles du jeu d'enquête classique : un crime a été commis dans un manoir, il faut trouver **qui**, **avec quelle arme** et **dans quelle pièce**.
+Un jeu d'enquête de déduction pour **2 à 6 détectives**, qui tourne dans le navigateur (PWA pour iPad et iPhone) : en solo sans compte ni réseau, en ligne à deux avec le compte commun à tous mes jeux. Règles du jeu d'enquête classique : un crime a été commis dans un manoir, il faut trouver **qui**, **avec quelle arme** et **dans quelle pièce**.
 
 > Les personnages sont des créations originales (couleurs des pions classiques, noms inventés). Le plateau est une recréation proche du plateau classique, pas une copie case par case.
 
@@ -8,17 +8,19 @@ Un jeu d'enquête de déduction pour **2 à 6 détectives**, qui tourne entière
 
 Adresse (GitHub Pages) : `https://maximeavril1869.github.io/EnqueteManoir/`
 
-**Installer sur l'iPad / l'iPhone :** ouvrir l'adresse dans Safari → bouton Partager → « Sur l'écran d'accueil ». Le jeu fonctionne ensuite hors ligne (sauf le mode téléphones, qui a besoin du wifi).
+**Installer sur l'iPad / l'iPhone :** ouvrir l'adresse dans Safari → bouton Partager → « Sur l'écran d'accueil ». Le solo fonctionne ensuite hors ligne ; le mode En ligne a besoin d'internet.
 
 ## Modes de jeu
 
 | Mode | Principe |
 |---|---|
-| **Passe-passe** | Un seul écran. À chaque tour, un écran « Passe l'iPad à… » masque tout ; le joueur appuie sur « Je suis… » pour voir ses cartes. |
-| **Face à face** | 2 humains de part et d'autre de l'iPad posé à plat. Les cartes restent cachées tant qu'on **maintient** le bouton œil. |
-| **Téléphones** | L'iPad est le plateau commun ; chaque joueur a ses cartes, son carnet et ses actions sur son téléphone. Connexion par code à 4 chiffres (ou QR code), ou par copier-coller en secours. |
+| **Solo** | 1 humain contre 1 à 5 ordinateurs (Débutant / Moyen / Expert), sur un seul appareil, sans compte. Partie sauvegardée automatiquement. |
+| **En ligne** | 2 humains, **chacun sur son appareil** (téléphone ou iPad). Les autres places : ordinateur ou absentes. L'hôte crée la partie (code à 4 lettres), l'invité la rejoint avec ce code. |
+| **Plateau** (en ligne) | Un iPad affiche la table commune en **lecture seule** (plateau, pions, suggestions publiques) ; personne ne joue dessus. Quand il est branché, les téléphones cachent la table et gardent main, carnet et boutons. |
 
-Dans tous les modes, chaque place peut être **Humain**, **Ordi** (Débutant / Moyen / Expert) ou **Absente** (son pion reste sur le plateau et peut être convoqué par une suggestion).
+Les anciens modes passe-passe, face à face et téléphones (PeerJS) ont été supprimés en v2.0.
+
+Les mains et le dossier confidentiel sont cachés **par confiance** : l'état complet est dans la partie en ligne, l'écran n'affiche que ce que chacun a le droit de voir.
 
 ## Règles implémentées
 
@@ -34,7 +36,7 @@ Dans tous les modes, chaque place peut être **Humain**, **Ordi** (Débutant / M
 npm test
 ```
 
-Les tests couvrent le plateau, la distribution, les déplacements, les suggestions et accusations, l'exactitude des déductions, des parties 100 % ordinateur, et le protocole du mode téléphones (avec de fausses connexions). Voir `ARCHITECTURE.md` et `CARNET_DE_BORD.md`.
+Les tests couvrent le plateau, la distribution, les déplacements, les suggestions et accusations, l'exactitude des déductions, des parties 100 % ordinateur, et l'absence de fuite dans la vue publique du plateau. Un test navigateur (`PYTHONDONTWRITEBYTECODE=1 python3 tests/e2e/en_ligne.py`, Playwright + faux serveur en mémoire) joue deux appareils, le plateau, les conflits, la reprise, Rejouer et le solo. Voir `ARCHITECTURE.md` et `CARNET_DE_BORD.md`.
 
 ## Fichiers du projet
 
@@ -43,4 +45,4 @@ Les tests couvrent le plateau, la distribution, les déplacements, les suggestio
 
 ## Licence
 
-© 2026 Maximeavril1869 — **Tous droits réservés.** Voir le fichier `LICENSE`. Les bibliothèques tierces de `js/vendor/` (PeerJS, qrcode-generator, licence MIT) gardent leur licence d'origine.
+© 2026 Maximeavril1869 — **Tous droits réservés.** Voir le fichier `LICENSE`.

@@ -133,13 +133,9 @@ export function panelHTML(view, ctx = {}) {
   o.push(`<div class="seathead"><span class="dot" style="background:${su.couleur}"></span><b>${esc(me.nom)}</b>${me.eliminated ? ' <span class="tag">éliminé</span>' : ''}</div>`);
   // main
   const main = view.hand.map(chipCarte).join('');
-  if (ctx.hold) {
-    o.push(`<div class="hand hold"><button class="btn small holdbtn" data-hold="1">👁️ Maintiens pour voir tes cartes</button><div class="cards secret">${main}</div></div>`);
-  } else {
-    o.push(`<div class="hand"><div class="cards">${main}</div></div>`);
-  }
+  o.push(`<div class="hand"><div class="cards">${main}</div></div>`);
   const lastReveal = view.reveals.length ? view.reveals[view.reveals.length - 1] : null;
-  if (lastReveal && !ctx.hold) {
+  if (lastReveal) {
     const from = view.players.find((p) => p.id === lastReveal.from);
     o.push(`<div class="reveal">🔎 Dernière carte vue : ${chipCarte(lastReveal.card)} <span class="muted">(montrée par ${esc(from ? from.nom : '')})</span></div>`);
   }
@@ -258,17 +254,23 @@ export function marqueSuivante(m) {
   return { '': '✗', '✗': '✓', '✓': '?', '?': '' }[m || ''];
 }
 
-export function passeHTML(nom, couleur) {
-  return `<div class="overlay gate"><div class="gatebox"><div class="bigdot" style="background:${couleur}"></div><h1>Passe l'iPad à<br><b>${esc(nom)}</b></h1><p class="muted">Les autres joueurs ne regardent pas l'écran !</p><button class="btn primary big" data-act="unlock">Je suis ${esc(nom)}</button></div></div>`;
-}
-
-export function finHTML(view, rot) {
+export function finHTML(view, opts = {}) {
   const w = view.players.find((p) => p.id === view.winner);
   const sol = view.solution;
+  const btns = opts.plateau
+    ? '<button class="btn primary" data-act="toMenu">Quitter le plateau</button>'
+    : `<button class="btn ghost" data-act="closeModal">Voir le plateau</button>${opts.online ? '<button class="btn" data-act="replay">Rejouer</button>' : ''}<button class="btn primary" data-act="toMenu">Menu</button>`;
   const html = `<h2>🏆 ${esc(w.nom)} résout l'enquête !</h2>
   <p>Le crime a été commis par <b>${esc(nomCarte(sol.s))}</b>, avec <b>${esc(nomCarte(sol.a))}</b>, dans <b>${esc(nomCarte(sol.p))}</b>.</p>
-  <div class="mfoot"><button class="btn ghost" data-act="closeModal">Voir le plateau</button><button class="btn primary" data-act="toMenu">Menu</button></div>`;
-  return modal(html, rot);
+  <div class="mfoot">${btns}</div>`;
+  return modal(html, false);
+}
+
+// Suggestions déjà faites (information publique : le plateau commun les affiche).
+export function historiqueHTML(view) {
+  const nom = (id) => (view.players.find((p) => p.id === id) || {}).nom || id;
+  const l = view.history.slice(-8).reverse().map((h) => `<li><b>${esc(nom(h.by))}</b> : ${esc(nomCarte(h.s))}, ${esc(nomCarte(h.a))}, ${esc(nomCarte(h.p))} — ${h.refuter ? 'réfuté par ' + esc(nom(h.refuter)) : 'personne ne réfute'}</li>`).join('');
+  return `<div class="logbox"><h3>Suggestions</h3><ul>${l || '<li class="muted">Aucune pour l\'instant.</li>'}</ul></div>`;
 }
 
 export function reglesHTML() {
@@ -286,80 +288,66 @@ export function reglesHTML() {
 export function menuHTML(hasSave) {
   return `<div class="menu"><div class="logo">🕵️</div><h1>EnqueteManoir</h1><p class="muted">Un jeu d'enquête pour 2 à 6 détectives</p>
   <div class="menubtns">
-    <button class="btn primary big" data-act="toSetup">Nouvelle partie</button>
-    ${hasSave ? '<button class="btn big" data-act="resume">Reprendre la partie</button>' : ''}
-    <button class="btn big" data-act="toJoin">📱 Rejoindre une partie (téléphone)</button>
+    <button class="btn primary big" data-act="toSetup" data-mode="solo">Partie solo contre l'ordi</button>
+    ${hasSave ? '<button class="btn big" data-act="resume">Reprendre la partie solo</button>' : ''}
+    <button class="btn big" data-act="toOnline">🌐 En ligne (2 joueurs)</button>
     <button class="btn big ghost" data-act="openRules">Règles</button>
-  </div><p class="small muted">© Tous droits réservés — Maximeavril1869 · v1.0</p></div>`;
+  </div><p class="small muted">© Tous droits réservés — Maximeavril1869 · v2.0</p></div>`;
 }
 
 export function setupHTML(cfg) {
-  const modes = [
-    ['passe', '🔁 Passe-passe', 'Un seul écran, on se passe l\'iPad à chaque tour'],
-    ['face', '↕️ Face à face', '2 humains de chaque côté de l\'iPad (cartes cachées tant qu\'on ne maintient pas le bouton)'],
-    ['tel', '📱 Téléphones', 'L\'iPad est le plateau, chaque joueur a ses cartes sur son téléphone'],
-  ];
+  const en = cfg.mode === 'online';
   const lignes = SUSPECTS.map((su) => {
     const r = cfg.roles[su.id];
     const seg = (v, txt) => `<button class="seg${r.role === v ? ' on' : ''}" data-act="setRole" data-id="${su.id}" data-v="${v}">${txt}</button>`;
-    const humainTxt = cfg.mode === 'tel' ? 'Téléphone' : 'Humain';
     return `<div class="seatrow"><span class="dot big" style="background:${su.couleur}"></span><div class="sname"><b>${esc(su.nom)}</b>
-      ${r.role === 'humain' && cfg.mode !== 'tel' ? `<input class="nameinp" data-id="${su.id}" value="${esc(r.nom)}" maxlength="16" aria-label="Prénom">` : ''}
+      ${r.role === 'moi' ? `<input class="nameinp" data-id="${su.id}" value="${esc(r.nom)}" maxlength="16" aria-label="Prénom">` : ''}
       ${r.role === 'ia' ? `<div class="lvl">${[1, 2, 3].map((n) => `<button class="seg small${r.niveau === n ? ' on' : ''}" data-act="setLvl" data-id="${su.id}" data-v="${n}">${['Débutant', 'Moyen', 'Expert'][n - 1]}</button>`).join('')}</div>` : ''}
-      </div><div class="roles">${seg('absent', 'Absent')}${seg('humain', humainTxt)}${seg('ia', '🤖 Ordi')}</div></div>`;
+      </div><div class="roles">${seg('absent', 'Absent')}${seg('moi', 'Moi')}${en ? seg('invite', 'Invité') : ''}${seg('ia', '🤖 Ordi')}</div></div>`;
   }).join('');
-  const nb = Object.values(cfg.roles).filter((r) => r.role !== 'absent').length;
-  const nbH = Object.values(cfg.roles).filter((r) => r.role === 'humain').length;
+  const rs = Object.values(cfg.roles);
+  const nb = rs.filter((r) => r.role !== 'absent').length;
+  const nbMoi = rs.filter((r) => r.role === 'moi').length;
+  const nbInv = rs.filter((r) => r.role === 'invite').length;
   let probleme = '';
-  if (nb < 2) probleme = 'Il faut au moins 2 joueurs.';
-  else if (nbH < 1) probleme = 'Il faut au moins un joueur humain.';
-  else if (cfg.mode === 'face' && nbH > 2) probleme = 'Le face à face est limité à 2 humains (utilise passe-passe ou téléphones sinon).';
-  return `<div class="setup"><div class="mhead"><button class="btn small ghost" data-act="toMenu">← Menu</button><h2>Nouvelle partie</h2></div>
-  <div class="modes">${modes.map(([v, t, d]) => `<button class="modecard${cfg.mode === v ? ' on' : ''}" data-act="setMode" data-v="${v}"><b>${t}</b><span>${d}</span></button>`).join('')}</div>
+  if (nbMoi !== 1) probleme = 'Choisis ton personnage (« Moi »).';
+  else if (en && nbInv !== 1) probleme = 'Choisis le personnage de ton invité (« Invité »).';
+  else if (nb < 2) probleme = 'Il faut au moins 2 joueurs.';
+  return `<div class="setup"><div class="mhead"><button class="btn small ghost" data-act="${en ? 'toOnline' : 'toMenu'}">← Retour</button><h2>${en ? 'Partie en ligne' : 'Partie solo'}</h2></div>
+  ${en ? '<p class="muted small">2 humains, chacun sur son appareil. Les autres places : ordinateur ou absentes. Si un iPad affiche le plateau commun, les téléphones cachent la table.</p>' : ''}
   <h3>Joueurs <span class="muted">(${nb})</span></h3><div class="seatlist">${lignes}</div>
   ${probleme ? `<p class="warn">${probleme}</p>` : ''}
-  <div class="mfoot"><button class="btn primary big" data-act="startGame"${probleme ? ' disabled' : ''}>${cfg.mode === 'tel' ? 'Ouvrir le salon' : 'Commencer'}</button></div></div>`;
+  <div class="mfoot"><button class="btn primary big" data-act="startGame"${probleme ? ' disabled' : ''}>${en ? 'Créer la partie' : 'Commencer'}</button></div></div>`;
 }
 
-export function salonHTML(info) {
-  // info : { code, url, qr, seats:[{id,nom,couleur,etat}], pret, erreur, manuel }
-  const lignes = info.seats.map((s) => `<div class="seatrow"><span class="dot big" style="background:${s.couleur}"></span><b>${esc(s.nom)}</b><span class="etat ${s.etat}">${{ libre: 'en attente…', pris: '✅ connecté', coupe: '⚠️ déconnecté' }[s.etat]}</span></div>`).join('');
-  return `<div class="setup"><div class="mhead"><button class="btn small ghost" data-act="toMenu">← Quitter</button><h2>Salon de la partie</h2></div>
-  ${info.erreur ? `<p class="warn">${esc(info.erreur)}</p>` : ''}
-  <div class="salon"><div class="codebox"><div class="muted">Sur chaque téléphone : ouvre la page du jeu, « Rejoindre », puis saisis le code</div><div class="code">${info.code || '…'}</div><div class="qr">${info.qr || ''}</div>
-  <div class="small muted">${esc(info.url || '')}</div></div>
-  <div class="seatlist">${lignes}</div></div>
-  <details class="manuel"><summary>Connexion manuelle (secours si le code ne fonctionne pas)</summary>
-   <p class="small muted">Sur l'iPad : « Créer une invitation » puis copie le texte vers le téléphone (message, AirDrop…). Sur le téléphone : « Rejoindre » → « Connexion manuelle », colle l'invitation, copie la réponse et colle-la ici.</p>
-   <button class="btn small" data-act="manuelOffre">Créer une invitation</button>
-   <textarea id="manOffre" readonly placeholder="Invitation à copier vers le téléphone"></textarea>
-   <button class="btn small ghost" data-act="copyOffre">Copier</button>
-   <textarea id="manRep" placeholder="Colle ici la réponse du téléphone"></textarea>
-   <button class="btn small" data-act="manuelRep">Valider la réponse</button>
-  </details>
-  <div class="mfoot"><button class="btn primary big" data-act="launchTel"${info.pret ? '' : ' disabled'}>Lancer la partie</button></div></div>`;
+// info : { connecte, email, msg, list:[{id,titre}]|null }
+export function onlineHTML(info) {
+  const liste = !info.list ? '<p class="muted small">Chargement…</p>' : info.list.length
+    ? info.list.map((r) => `<div class="seatrow"><b>${esc(r.id)}</b><span class="muted small">${esc(r.titre || '')}</span><span class="etat"><button class="btn small" data-act="olResume" data-id="${esc(r.id)}">Reprendre</button> <button class="btn small ghost" data-act="olDel" data-id="${esc(r.id)}" aria-label="Supprimer la partie ${esc(r.id)}">✕</button></span></div>`).join('')
+    : '<p class="muted small">Aucune pour l\'instant.</p>';
+  const corps = !info.connecte
+    ? `<p class="muted">Connecte-toi avec le compte de tes autres jeux.</p>
+       <input id="olEmail" class="nameinp" type="email" autocomplete="username" placeholder="E-mail">
+       <input id="olPwd" class="nameinp" type="password" autocomplete="current-password" placeholder="Mot de passe">
+       <button class="btn primary big" data-act="olLogin">Se connecter</button>`
+    : `<p class="muted small">Connecté : ${esc(info.email)} <button class="btn small ghost" data-act="olLogout">Se déconnecter</button></p>
+       <button class="btn primary big" data-act="toSetup" data-mode="online">Créer une partie</button>
+       <h3>Rejoindre une partie</h3>
+       <input id="codeInp" class="codeinp" maxlength="4" autocapitalize="characters" autocomplete="off" placeholder="ABCD">
+       <input id="nomInp" class="nameinp" maxlength="16" placeholder="Ton prénom (facultatif)">
+       <button class="btn big" data-act="olJoin">Rejoindre</button>
+       <h3>Mes parties</h3><div class="seatlist">${liste}</div>
+       <h3>Plateau commun (iPad)</h3>
+       <p class="muted small">Affiche la table en lecture seule. Personne ne joue dessus : les joueurs gardent leurs cartes sur leur téléphone.</p>
+       <input id="platInp" class="codeinp" maxlength="4" autocapitalize="characters" autocomplete="off" placeholder="ABCD">
+       <button class="btn big" data-act="platStart">Afficher le plateau</button>`;
+  return `<div class="setup"><div class="mhead"><button class="btn small ghost" data-act="toMenu">← Menu</button><h2>En ligne</h2></div>
+  ${info.msg ? `<p class="warn">${esc(info.msg)}</p>` : ''}${corps}</div>`;
 }
 
-export function rejoindreHTML(info) {
-  // info : { etape: 'code'|'choix'|'attente', code, seats, erreur, manuel }
-  let corps = '';
-  if (info.etape === 'code') {
-    corps = `<p class="muted">Saisis le code à 4 chiffres affiché sur l'iPad.</p>
-    <input id="codeInp" class="codeinp" inputmode="numeric" maxlength="4" value="${esc(info.code || '')}" placeholder="0000">
-    <button class="btn primary big" data-act="doJoin">Se connecter</button>
-    <details class="manuel"><summary>Connexion manuelle (secours)</summary>
-      <p class="small muted">Colle ici l'invitation reçue de l'iPad :</p>
-      <textarea id="manOffre" placeholder="Invitation de l'iPad"></textarea>
-      <button class="btn small" data-act="manuelJoin">Générer la réponse</button>
-      <textarea id="manRep" readonly placeholder="Réponse à copier vers l'iPad"></textarea>
-      <button class="btn small ghost" data-act="copyRep">Copier</button>
-    </details>`;
-  } else if (info.etape === 'choix') {
-    corps = `<p class="muted">Qui es-tu ?</p><div class="seatlist">${info.seats.map((s) => `<button class="seatrow pick" data-act="claim" data-id="${s.id}"${s.etat === 'pris' ? ' disabled' : ''}><span class="dot big" style="background:${s.couleur}"></span><b>${esc(s.nom)}</b><span class="etat ${s.etat}">${s.etat === 'pris' ? 'déjà pris' : 'libre'}</span></button>`).join('')}</div>`;
-  } else {
-    corps = `<div class="center"><div class="spinner"></div><p>Connecté. En attente du lancement de la partie…</p></div>`;
-  }
-  return `<div class="setup"><div class="mhead"><button class="btn small ghost" data-act="toMenu">← Menu</button><h2>Rejoindre une partie</h2></div>${info.erreur ? `<p class="warn">${esc(info.erreur)}</p>` : ''}${corps}</div>`;
+export function attenteHTML(code) {
+  return `<div class="center"><div><div class="spinner" style="margin:0 auto 12px"></div><p>En attente du deuxième joueur…</p><div class="code">${esc(code)}</div>
+  <p class="muted small">Sur son appareil : En ligne → Rejoindre, puis ce code.</p><button class="btn ghost" data-act="toMenu">Quitter</button></div></div>`;
 }
 
 // ---------- Liste des joueurs ----------

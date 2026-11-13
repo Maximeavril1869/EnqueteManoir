@@ -1,38 +1,42 @@
-// Chef d'orchestre : écrans, modes de jeu (passe-passe, face à face, téléphones), ordinateur, sauvegarde.
+// Chef d'orchestre : écrans, partie solo (1 humain + ordis) et mode « En ligne » (2 humains, un appareil chacun).
+// L'état complet de la partie est dans la ligne Supabase (jeu « enquetemanoir ») ; chaque écran n'affiche que SA vue
+// (engine.vuePour) : mains et dossier cachés « par confiance ». Un plateau (iPad) peut afficher la table commune en lecture seule.
 import * as E from './engine.js';
 import { decider } from './ai.js';
 import * as UI from './ui.js';
-import { SalonHote, ClientTel } from './net.js';
-import { SUSPECTS, SUSPECT_PAR_ID, PIECE_PAR_ID } from './data.js';
+import { SUSPECTS, PIECE_PAR_ID } from './data.js';
 
+const EL = window.EnLigne;
+const JEU = 'enquetemanoir';
 const $app = document.getElementById('app');
 const SAVE_KEY = 'em-save-v1';
+const MAP_KEY = 'em-online-map-v1';
 
 const App = {
-  screen: 'menu',
-  cfg: defautCfg(),
-  mode: null, // passe | face | tel (hôte) | client
-  state: null, // partie complète (local ou hôte)
-  view: null, // dernière vue reçue (client)
-  unlocked: null,
+  screen: 'menu', // menu | setup | online | game | plateau
+  cfg: defautCfg('solo'),
+  mode: null, // solo | online
+  state: null,
   modal: null, // { kind, pid }
   sel: {},
-  aide: localStorage.getItem('em-aide') === '1',
+  aide: lire('em-aide') === '1',
   finVue: false,
-  host: null,
-  client: null,
-  salon: { erreur: '', code: '', qr: '', url: '', manuel: null },
-  join: { etape: 'code', code: '', seats: [], erreur: '' },
-  coupe: false,
+  ol: { msg: '', list: null },
+  off: false, // réseau coupé (en ligne / plateau)
 };
+let ONL = null; // partie en ligne : { id, me, version, dirty, pushing, status, watch, retry, plat }
+let PL = null; // plateau : { id, version, watch, rowId, rowVer, timer, t2, busy }
 
-function defautCfg() {
+function lire(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+function ecrire(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* stockage refusé */ } }
+
+function defautCfg(mode) {
   const roles = {};
   for (const s of SUSPECTS) roles[s.id] = { role: 'absent', nom: s.court, niveau: 2 };
-  roles.corail.role = 'humain';
-  roles.safran.role = 'ia';
+  roles.corail.role = 'moi';
+  roles.safran.role = mode === 'online' ? 'invite' : 'ia';
   roles.sauge.role = 'ia';
-  return { mode: 'passe', roles };
+  return { mode, roles };
 }
 
 // ---------- Aides ----------
@@ -49,48 +53,47 @@ function toast(msg) {
   toast.t = setTimeout(() => t.classList.remove('on'), 2600);
 }
 
-function humains() {
-  return App.state ? App.state.players.filter((p) => p.kind === 'humain') : [];
+function soloPid() {
+  const p = App.state && App.state.players.find((q) => q.kind === 'humain');
+  return p ? p.id : null;
 }
-function vueDe(pid) {
-  if (App.mode === 'client') return App.view;
-  return E.vuePour(App.state, pid);
+// Le joueur de CET appareil.
+function curPid() {
+  if (!App.state) return null;
+  if (App.mode === 'online') return ONL ? App.state.online.seats[ONL.me] : null;
+  return soloPid();
 }
-function aSauvegarde() {
-  try { return !!localStorage.getItem(SAVE_KEY); } catch (e) { return false; }
-}
+function curView() { return E.vuePour(App.state, curPid()); }
+function isHost() { return App.mode === 'online' && !!ONL && ONL.me === 0 && !!App.state.online && App.state.online.joined; }
+function plPresent() { return App.mode === 'online' && !!ONL && !!ONL.plat && ONL.plat.present; }
+function noTable() { return plPresent() && !ONL.plat.override; }
+
+function aSauvegarde() { return !!lire(SAVE_KEY); }
 function sauver() {
-  if (!App.state || App.mode === 'tel') return;
-  try {
-    localStorage.setItem(SAVE_KEY, JSON.stringify({ mode: App.mode, state: App.state }));
-  } catch (e) { /* stockage plein ou refusé */ }
+  if (!App.state || App.mode !== 'solo') return;
+  ecrire(SAVE_KEY, JSON.stringify({ mode: 'solo', state: App.state }));
 }
-function effacerSauvegarde() {
-  try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* ignoré */ }
-}
+function effacerSauvegarde() { try { localStorage.removeItem(SAVE_KEY); } catch (e) { /* ignoré */ } }
 const cleNotes = (gid, pid) => `em-notes-${gid}-${pid}`;
 function lireMarques(view) {
-  try { return JSON.parse(localStorage.getItem(cleNotes(view.gameId, view.you)) || '{}'); } catch (e) { return {}; }
+  try { return JSON.parse(lire(cleNotes(view.gameId, view.you)) || '{}'); } catch (e) { return {}; }
 }
-function ecrireMarques(view, m) {
-  try { localStorage.setItem(cleNotes(view.gameId, view.you), JSON.stringify(m)); } catch (e) { /* ignoré */ }
-}
+function ecrireMarques(view, m) { ecrire(cleNotes(view.gameId, view.you), JSON.stringify(m)); }
 
-// ---------- Rendu ----------
+// ---------- Rendu (ne doit JAMAIS écrire dans la partie) ----------
 function render() {
-  // On conserve les champs de saisie et le volet « secours » ouvert d'un rendu à l'autre.
+  // On conserve les champs de saisie d'un rendu à l'autre.
   const champs = {};
   document.querySelectorAll('textarea[id], input[id]').forEach((el) => (champs[el.id] = el.value));
-  const ouvert = !!document.querySelector('details.manuel[open]');
   const scroll = {};
   document.querySelectorAll('[data-keepscroll]').forEach((el) => (scroll[el.dataset.keepscroll] = el.scrollTop));
   let html = '';
   switch (App.screen) {
     case 'menu': html = UI.menuHTML(aSauvegarde()); break;
     case 'setup': html = UI.setupHTML(App.cfg); break;
-    case 'salon': html = renderSalon(); break;
-    case 'join': html = UI.rejoindreHTML(App.join); break;
+    case 'online': html = UI.onlineHTML({ connecte: EL.connecte(), email: EL.email(), msg: App.ol.msg, list: App.ol.list }); break;
     case 'game': html = renderJeu(); break;
+    case 'plateau': html = renderPlateau(); break;
   }
   $app.innerHTML = html;
   document.querySelectorAll('[data-keepscroll]').forEach((el) => {
@@ -100,17 +103,20 @@ function render() {
     const el = document.getElementById(id);
     if (el && !el.value) el.value = v;
   }
-  if (ouvert) document.querySelectorAll('details.manuel').forEach((d) => (d.open = true));
   scrollMini();
 }
+
+const quitterHTML = () => `<div class="topbar"><button class="btn small ghost" data-act="toMenu">← Menu</button>${App.mode === 'online' && ONL ? `<span class="muted small">Partie ${ONL.id}</span>` : ''}</div>`;
+const offHTML = () => (App.off ? '<div class="warn offbar">Hors ligne : la partie reprendra dès le retour du réseau.</div>' : '');
 
 // Sur téléphone, le plateau est agrandi dans un cadre défilant ; on le centre sur le pion du joueur.
 function scrollMini() {
   const box = document.querySelector('.miniboard');
-  const v = App.view;
-  if (!box || !v || App.mode !== 'client') return;
-  const svg = box.querySelector('svg');
+  if (!box || !App.state || App.screen !== 'game') return;
+  const v = curView();
   const pos = v.pawns[v.you];
+  if (!pos) return;
+  const svg = box.querySelector('svg');
   const cx = pos.room ? (PIECE_PAR_ID[pos.room].r.x0 + PIECE_PAR_ID[pos.room].r.x1 + 1) / 2 : pos.x + 0.5;
   const cy = pos.room ? (PIECE_PAR_ID[pos.room].r.y0 + PIECE_PAR_ID[pos.room].r.y1 + 1) / 2 : pos.y + 0.5;
   const k = svg.getBoundingClientRect().width / 24;
@@ -118,123 +124,79 @@ function scrollMini() {
   box.scrollTop = Math.max(0, cy * k - box.clientHeight / 2);
 }
 
-function renderSalon() {
-  const h = App.host;
-  return UI.salonHTML({
-    code: App.salon.code,
-    url: App.salon.url,
-    qr: App.salon.qr,
-    erreur: App.salon.erreur,
-    seats: h ? h.listeSeats() : [],
-    pret: h ? h.pret() : false,
-  });
-}
-
 function overlayHTML() {
   const m = App.modal;
   if (!m) return '';
   if (m.kind === 'rules') return UI.reglesHTML();
-  const view = vueDe(m.pid);
-  const rot = App.mode === 'face' && humains().findIndex((p) => p.id === m.pid) === 1;
-  if (m.kind === 'carnet') return UI.carnetHTML(view, lireMarques(view), App.aide, rot);
-  if (m.kind === 'suggest' || m.kind === 'accuse') return UI.selectionHTML(view, m.kind, App.sel, rot);
+  const view = curView();
+  if (m.kind === 'carnet') return UI.carnetHTML(view, lireMarques(view), App.aide, false);
+  if (m.kind === 'suggest' || m.kind === 'accuse') return UI.selectionHTML(view, m.kind, App.sel, false);
   if (m.kind === 'log') return `<div class="overlay"><div class="modal wide"><div class="mhead"><h2>Journal</h2><button class="btn small ghost" data-act="closeModal">Fermer</button></div>${UI.logHTML(view)}</div></div>`;
   return '';
 }
 
-// Le plateau n'est cliquable que lorsque c'est à un humain de se déplacer (jamais pendant le tour de l'ordi).
-function acteurHumain() {
-  if (!App.state) return false;
-  const a = E.joueur(App.state, E.acteurCourant(App.state));
-  return !!a && a.kind === 'humain';
-}
-
 function renderJeu() {
-  const m = App.mode;
-  let corps = '';
-  let fin = '';
-  if (m === 'client') {
-    const v = App.view;
-    if (!v) return '<div class="center"><div class="spinner"></div></div>';
-    const monTour = v.actor === v.you && v.phase === 'moving';
-    corps = `<div class="phone">${App.coupe ? '<div class="warn">Connexion perdue… reconnexion en cours.</div>' : ''}${UI.statutHTML(v)}${monTour ? `<div class="miniboard">${UI.boardHTML(v, { clickable: true })}</div>` : ''}${UI.panelHTML(v, {})}${UI.rosterHTML(v)}</div>`;
-    if (v.phase === 'over' && !App.finVue) fin = UI.finHTML(v, false);
-    return corps + overlayHTML() + fin;
-  }
   const st = App.state;
-  const pub = E.vuePour(st, null);
-  const over = st.phase === 'over';
-  if (over && !App.finVue) fin = UI.finHTML(pub, false);
+  if (App.mode === 'online' && !st.online.joined) return UI.attenteHTML(ONL.id);
+  const v = curView();
+  const mon = v.actor === v.you;
+  const fin = st.phase === 'over' && !App.finVue ? UI.finHTML(v, { online: App.mode === 'online' }) : '';
 
-  if (m === 'face') {
-    const hs = humains();
-    const pan = (p, rot) => (p ? UI.panelHTML(E.vuePour(st, p.id), { hold: true, rot, log: true }) : '<div class="seat empty"></div>');
-    corps = `<div class="game face"><div class="seatwrap top">${pan(hs[1], true)}</div>
-      <div class="mid"><aside class="sideL">${UI.rosterHTML(pub)}${UI.logHTML(pub)}</aside><section class="boardwrap">${UI.boardHTML(pub, { clickable: acteurHumain() })}</section><aside class="sideR">${UI.statutHTML(pub)}</aside></div>
-      <div class="seatwrap bottom">${pan(hs[0], false)}</div></div>`;
+  if (App.mode === 'online') {
+    // Plateau détecté : le téléphone cache la table commune (il garde main, carnet et boutons).
+    const barre = plPresent()
+      ? `<div class="tablebar"><span>📺 Plateau détecté</span><button class="btn small ghost" data-act="toggleTable">${ONL.plat.override ? 'Masquer la table' : 'Afficher la table'}</button></div>`
+      : '';
+    const sansTable = noTable();
+    const deplace = v.phase === 'moving' && mon;
+    // Pour choisir sa case, on a toujours besoin du plateau, même quand l'iPad l'affiche.
+    let plateau = '';
+    if (deplace) plateau = `<div class="miniboard">${UI.boardHTML(v, { clickable: true })}</div>`;
+    else if (!sansTable) plateau = `<div class="fitboard">${UI.boardHTML(v, {})}</div>`;
+    const corps = `<div class="phone">${quitterHTML()}${offHTML()}${barre}${UI.statutHTML(v)}${plateau}${UI.panelHTML(v, {})}${sansTable ? '' : UI.rosterHTML(v)}</div>`;
     return corps + overlayHTML() + fin;
   }
 
-  if (m === 'tel') {
-    corps = `<div class="game"><section class="boardwrap">${UI.boardHTML(pub, { clickable: acteurHumain() })}</section><aside class="side">${UI.statutHTML(pub)}${UI.rosterHTML(pub)}${UI.logHTML(pub)}${App.host ? rosterTel() : ''}</aside></div>`;
-    return corps + fin;
-  }
-
-  // passe-passe
-  const hs = humains();
-  const actor = E.acteurCourant(st);
-  const actorHum = hs.find((p) => p.id === actor);
-  let seat = null;
-  if (actorHum) {
-    if (hs.length === 1) App.unlocked = actorHum.id;
-    if (App.unlocked !== actorHum.id) {
-      return `<div class="game"><section class="boardwrap"></section></div>${UI.passeHTML(actorHum.nom, SUSPECT_PAR_ID[actorHum.id].couleur)}`;
-    }
-    seat = actorHum.id;
-  } else if (hs.length === 1) {
-    seat = hs[0].id; // un seul humain : il peut garder son panneau pendant que l'ordi joue
-  }
-  const vue = seat ? E.vuePour(st, seat) : pub;
-  const panneau = seat ? UI.panelHTML(vue, { log: true }) : '';
-  corps = `<div class="game"><section class="boardwrap">${UI.boardHTML(vue, { clickable: acteurHumain() })}</section><aside class="side">${UI.statutHTML(vue)}${panneau}${UI.rosterHTML(vue)}${UI.logHTML(vue)}</aside></div>`;
+  // Solo : un seul écran, le joueur voit tout ce qui le concerne.
+  const corps = `<div class="game"><section class="boardwrap">${UI.boardHTML(v, { clickable: mon })}</section><aside class="side">${quitterHTML()}${UI.statutHTML(v)}${UI.panelHTML(v, { log: true })}${UI.rosterHTML(v)}${UI.logHTML(v)}</aside></div>`;
   return corps + overlayHTML() + fin;
 }
 
-function rosterTel() {
-  const h = App.host;
-  const etats = h.listeSeats().filter((s) => s.etat !== 'pris');
-  if (!etats.length) return '';
-  return `<div class="warn">⚠️ Téléphone déconnecté : ${etats.map((s) => UI.esc(s.nom)).join(', ')}. Le jeu reprendra dès sa reconnexion.</div>`;
+// Plateau commun : lecture seule, vue publique (aucune main, aucun dossier).
+function renderPlateau() {
+  const st = App.state;
+  const tete = `<div class="plhead">📺 Plateau · ${PL ? PL.id : ''}</div>`;
+  if (!st.online || !st.online.joined) {
+    return `<div class="center"><div><div class="spinner" style="margin:0 auto 12px"></div><p>Plateau ${PL ? PL.id : ''} : en attente des joueurs…</p><button class="btn ghost" data-act="toMenu">Quitter</button></div></div>`;
+  }
+  const pub = E.vuePour(st, null);
+  const fin = st.phase === 'over' ? UI.finHTML(pub, { plateau: true }) : '';
+  return `<div class="game plateau"><section class="boardwrap">${UI.boardHTML(pub, {})}</section><aside class="side">${offHTML()}${tete}${UI.statutHTML(pub)}${UI.rosterHTML(pub)}${UI.historiqueHTML(pub)}${UI.logHTML(pub)}<button class="btn small ghost" data-act="toMenu">Quitter le plateau</button></aside></div>${fin}`;
 }
 
 // ---------- Jeu : actions et ordinateur ----------
 let aiTimer = null;
 
 function dispatch(action) {
-  if (window.__trace) window.__trace.push(JSON.stringify(action) + ' @' + (App.state ? App.state.phase : '?'));
-  if (App.mode === 'client') {
-    App.client.agir(action);
-    return;
+  const st = App.state;
+  if (window.__trace) window.__trace.push(JSON.stringify(action) + ' @' + st.phase);
+  if (App.mode === 'online') {
+    const j = E.joueur(st, action.by);
+    const permis = action.by === curPid() || (isHost() && j && j.kind === 'ia');
+    if (!permis || !st.online.joined) return;
   }
-  const r = E.appliquer(App.state, action);
+  const r = E.appliquer(st, action);
   if (!r.ok) {
     toast(r.err);
     return;
   }
-  if (App.state.phase === 'over') effacerSauvegarde();
+  if (st.phase === 'over' && App.mode === 'solo') effacerSauvegarde();
   apresChangement();
 }
 
 function apresChangement() {
-  const st = App.state;
-  // En passe-passe, on verrouille dès que l'acteur change.
-  if (App.mode === 'passe') {
-    const act = E.acteurCourant(st);
-    if (act !== App.unlocked) App.unlocked = null;
-  }
-  sauver();
-  if (App.host) App.host.envoyerVues();
   App.modal = App.modal && ['carnet', 'log', 'rules'].includes(App.modal.kind) ? App.modal : null;
+  if (App.mode === 'online') { ONL.dirty = true; pushState(); } else sauver();
   render();
   planifierOrdi();
 }
@@ -243,27 +205,31 @@ function planifierOrdi() {
   clearTimeout(aiTimer);
   const st = App.state;
   if (!st || st.phase === 'over' || App.screen !== 'game') return;
+  if (App.mode === 'online' && !isHost()) return; // seul l'hôte fait jouer les ordinateurs
   const acteur = E.joueur(st, E.acteurCourant(st));
-  if (acteur.kind !== 'ia') return;
+  if (!acteur || acteur.kind !== 'ia') return;
   const delais = { start: 900, moving: 1000, act: 900, refuting: 800, after: 900 };
+  const d = window.BOT_DELAY != null ? window.BOT_DELAY : delais[st.phase] || 900;
   aiTimer = setTimeout(() => {
-    if (App.state !== st || st.phase === 'over') return;
-    const vue = E.vuePour(st, acteur.id);
-    const action = decider(vue, Math.random);
+    if (App.state !== st || st.phase === 'over' || App.screen !== 'game') return;
+    const action = decider(E.vuePour(st, acteur.id), Math.random);
     if (action) dispatch(action);
-  }, window.__fastAI ? 15 : delais[st.phase] || 900);
+  }, d);
 }
 
-function demarrerPartie(mode) {
+function cfgJoueurs() {
   const joueurs = [];
   for (const s of SUSPECTS) {
     const r = App.cfg.roles[s.id];
     if (r.role === 'absent') continue;
-    joueurs.push({ id: s.id, nom: (r.nom || s.court).trim() || s.court, kind: r.role === 'humain' ? 'humain' : 'ia', niveau: r.niveau });
+    joueurs.push({ id: s.id, nom: r.role === 'moi' ? (r.nom || s.court).trim() || s.court : s.court, kind: r.role === 'ia' ? 'ia' : 'humain', niveau: r.niveau });
   }
-  App.state = E.nouvellePartie({ joueurs });
-  App.mode = mode;
-  App.unlocked = null;
+  return joueurs;
+}
+
+function demarrerSolo() {
+  App.state = E.nouvellePartie({ joueurs: cfgJoueurs() });
+  App.mode = 'solo';
   App.modal = null;
   App.finVue = false;
   App.screen = 'game';
@@ -272,135 +238,295 @@ function demarrerPartie(mode) {
   planifierOrdi();
 }
 
-// ---------- Mode téléphones : hôte ----------
-async function ouvrirSalon() {
-  const seats = SUSPECTS.filter((s) => App.cfg.roles[s.id].role === 'humain').map((s) => ({ id: s.id, nom: s.nom, couleur: s.couleur }));
-  App.salon = { erreur: '', code: '', qr: '', url: '', manuel: null };
-  App.host = new SalonHote(seats, {
-    change: () => {
-      if (App.screen === 'salon') render();
-      else if (App.screen === 'game') {
-        render();
-        App.host.envoyerVues();
-      }
-    },
-    action: (a) => dispatch(a),
-    erreur: (msg) => {
-      App.salon.erreur = 'Connexion : ' + msg;
-      render();
-    },
-  });
-  App.screen = 'salon';
+function goHome() {
+  clearTimeout(aiTimer);
+  plStop();
+  if (ONL) onlineStop(); else if (App.mode === 'solo' && App.state && App.state.phase !== 'over') sauver();
+  App.state = null;
+  App.mode = null;
+  App.modal = null;
+  App.off = false;
+  App.screen = 'menu';
   render();
-  try {
-    const code = await App.host.ouvrir();
-    App.salon.code = code;
-    App.salon.url = `${location.origin}${location.pathname}?join=${code}`;
-    try {
-      const qr = qrcode(0, 'M');
-      qr.addData(App.salon.url);
-      qr.make();
-      App.salon.qr = qr.createSvgTag({ cellSize: 4, margin: 2 });
-    } catch (e) { /* QR facultatif */ }
-  } catch (e) {
-    App.salon.erreur = (e && e.message) || String(e);
-    App.salon.erreur += ' Tu peux utiliser la connexion manuelle ci-dessous.';
-  }
-  if (App.screen === 'salon') render();
 }
 
-function lancerTel() {
-  if (!App.host || !App.host.pret()) return;
-  const joueurs = [];
-  for (const s of SUSPECTS) {
-    const r = App.cfg.roles[s.id];
-    if (r.role === 'absent') continue;
-    joueurs.push({ id: s.id, nom: s.court, kind: r.role === 'humain' ? 'humain' : 'ia', niveau: r.niveau });
+// ---------- En ligne ----------
+function olMsg(t) { App.ol.msg = t || ''; if (App.screen === 'online') render(); }
+function olError(e) {
+  if (e && e.kind === 'auth') { olMsg('Session expirée : reconnecte-toi.'); }
+  else if (e && e.kind === 'reseau') olMsg("Pas de réseau : impossible de joindre le service pour l'instant.");
+  else olMsg('Erreur : ' + (e && e.message ? e.message : 'inconnue'));
+}
+function olList() {
+  if (!EL.connecte()) return;
+  EL.liste(JEU).then((a) => { App.ol.list = a; if (App.screen === 'online') render(); }).catch(olError);
+}
+function olOpen() {
+  App.screen = 'online';
+  App.ol = { msg: '', list: null };
+  render();
+  olList();
+}
+function getMap() { try { return JSON.parse(lire(MAP_KEY)) || {}; } catch (e) { return {}; } }
+function setMap(id, me) { const m = getMap(); m[id] = me; ecrire(MAP_KEY, JSON.stringify(m)); }
+function titre() {
+  const st = App.state;
+  const noms = st.online.seats.map((pid) => (E.joueur(st, pid) || {}).nom || '?');
+  const suite = !st.online.joined ? 'en attente' : st.phase === 'over' ? 'terminée' : 'tour ' + st.turnCount;
+  return noms.join(' et ') + ' · ' + suite;
+}
+function onlineStart(id, me, version) {
+  onlineStop();
+  ONL = { id, me, version, dirty: false, pushing: false, status: 'ok', watch: null, retry: null };
+  setMap(id, me);
+  ONL.watch = EL.surveiller(id, () => (ONL ? ONL.version : 0), onRemote, onStatus);
+  platWatch(ONL);
+}
+function onlineStop() {
+  if (ONL) {
+    if (ONL.watch) ONL.watch.stop();
+    clearTimeout(ONL.retry);
+    if (ONL.plat) { ONL.plat.stopped = true; clearTimeout(ONL.plat.timer); }
   }
-  App.state = E.nouvellePartie({ joueurs });
-  App.mode = 'tel';
-  App.finVue = false;
+  ONL = null;
+  App.off = false;
+}
+function onStatus(st) {
+  if (!ONL) return;
+  ONL.status = st;
+  App.off = st === 'hors-ligne';
+  if (st === 'supprimee') { goHome(); olOpen(); olMsg('Cette partie a été supprimée.'); return; }
+  if (st === 'auth') { goHome(); olOpen(); olError({ kind: 'auth' }); return; }
+  if (st === 'ok' && ONL.dirty && !ONL.pushing) pushState();
+  if (App.screen === 'game') render();
+}
+function onlineShow() {
   App.screen = 'game';
-  App.host.lancer((pid) => E.vuePour(App.state, pid));
+  App.modal = App.modal && ['carnet', 'log', 'rules'].includes(App.modal.kind) ? App.modal : null;
   render();
   planifierOrdi();
 }
-
-// ---------- Mode téléphones : client ----------
-function creerClient() {
-  App.client = new ClientTel({
-    salon: (seats, demarre) => {
-      App.join.seats = seats;
-      if (App.join.etape === 'code') App.join.etape = 'choix';
-      if (App.screen === 'join') render();
-    },
-    claimed: (pid) => {
-      App.join.etape = 'attente';
-      try { sessionStorage.setItem('em-join', JSON.stringify({ code: App.join.code, pid })); } catch (e) { /* ignoré */ }
-      if (App.screen === 'join') render();
-    },
-    vue: (v) => {
-      App.view = v;
-      App.mode = 'client';
-      App.coupe = false;
-      if (App.screen !== 'game') App.screen = 'game';
-      render();
-    },
-    erreur: (msg) => {
-      App.join.erreur = msg;
-      if (App.screen === 'join') render();
-      else toast(msg);
-    },
-    coupe: () => {
-      if (App.screen === 'game') {
-        App.coupe = true;
-        render();
-        reconnecter();
-      } else {
-        App.join.erreur = 'Connexion perdue.';
-        App.join.etape = 'code';
-        if (App.screen === 'join') render();
-      }
-    },
+function takeRemote(row) {
+  App.state = row.etat;
+  ONL.version = row.version;
+  App.sel = {};
+  if (App.state.phase !== 'over') App.finVue = false;
+}
+function onRemote() {
+  const o = ONL;
+  if (!o || o.pushing || o.dirty) return;
+  return EL.lire(o.id).then((row) => {
+    if (ONL !== o || !row || row.version <= o.version || o.pushing || o.dirty) return;
+    takeRemote(row);
+    if (App.modal && (App.modal.kind === 'suggest' || App.modal.kind === 'accuse')) App.modal = null;
+    onlineShow();
   });
 }
-
-async function rejoindre(code) {
-  App.join.code = code;
-  App.join.erreur = '';
-  creerClient();
-  try {
-    await App.client.connecter(code);
-  } catch (e) {
-    App.join.erreur = e.message || String(e);
-    App.join.etape = 'code';
-    render();
-  }
+function pushState() {
+  const o = ONL;
+  if (!o || o.pushing || !o.dirty) return;
+  o.pushing = true;
+  o.dirty = false;
+  EL.ecrire(o.id, o.version, App.state, titre()).then((nv) => {
+    if (ONL !== o) return;
+    o.pushing = false;
+    if (nv) {
+      o.version = nv;
+      if (o.status === 'hors-ligne') onStatus('ok');
+      if (o.dirty) pushState();
+      return;
+    }
+    // Conflit : l'autre appareil a écrit avant nous. Son état l'emporte, notre action est annulée.
+    return EL.lire(o.id).then((row) => {
+      if (ONL !== o || !row) return;
+      o.dirty = false;
+      takeRemote(row);
+      if (App.state.online.uids.indexOf(EL.uid()) < 0) { goHome(); olOpen(); olMsg('Cette partie a déjà ses deux joueurs.'); return; }
+      App.modal = null;
+      onlineShow();
+      toast("Ton action a été annulée : l'autre appareil a joué en même temps.");
+    });
+  }).catch((e) => {
+    if (ONL !== o) return;
+    o.pushing = false;
+    o.dirty = true;
+    onStatus(e && e.kind === 'reseau' ? 'hors-ligne' : 'erreur');
+    if (e && e.kind === 'auth') return;
+    clearTimeout(o.retry);
+    o.retry = setTimeout(() => { if (ONL === o) pushState(); }, 2000);
+  });
+}
+function onlineCreate() {
+  const joueurs = cfgJoueurs();
+  const st = E.nouvellePartie({ joueurs });
+  const moi = SUSPECTS.find((s) => App.cfg.roles[s.id].role === 'moi').id;
+  const inv = SUSPECTS.find((s) => App.cfg.roles[s.id].role === 'invite').id;
+  st.online = { uids: [EL.uid(), null], joined: false, seats: [moi, inv] };
+  EL.creer(JEU, st, E.joueur(st, moi).nom + ' · en attente').then((r) => {
+    App.state = st;
+    App.mode = 'online';
+    App.finVue = false;
+    onlineStart(r.id, 0, r.version);
+    onlineShow();
+  }).catch((e) => { olOpen(); olError(e); });
+}
+function seatFor(id, st) {
+  let me = getMap()[id];
+  if (me == null && st.online) { const k = st.online.uids.indexOf(EL.uid()); if (k >= 0) me = k; }
+  return me;
+}
+function onlineJoin(code, nom) {
+  code = (code || '').trim().toUpperCase();
+  if (code.length !== 4) { olMsg('Le code a 4 lettres.'); return; }
+  olMsg('');
+  EL.lire(code).then((row) => {
+    if (!row || row.jeu !== JEU) { olMsg('Code inconnu.'); return; }
+    const st = row.etat;
+    const me = seatFor(code, st);
+    App.mode = 'online';
+    App.finVue = false;
+    if (me != null && (st.online.joined || me === 0)) { App.state = st; onlineStart(code, me, row.version); onlineShow(); return; }
+    if (st.online.joined) { App.mode = null; olMsg('Cette partie a déjà ses deux joueurs.'); return; }
+    App.state = st;
+    onlineStart(code, 1, row.version);
+    const j = E.joueur(st, st.online.seats[1]);
+    if (nom && nom.trim()) j.nom = nom.trim();
+    st.online.uids[1] = EL.uid();
+    st.online.joined = true;
+    st.log.push({ txt: `${j.nom} rejoint la partie.` });
+    ONL.dirty = true;
+    pushState();
+    onlineShow();
+  }).catch((e) => { App.mode = null; olError(e); });
+}
+function onlineResume(id) {
+  olMsg('');
+  EL.lire(id).then((row) => {
+    if (!row) { olMsg('Partie introuvable.'); olList(); return; }
+    const me = seatFor(id, row.etat);
+    App.state = row.etat;
+    App.mode = 'online';
+    App.finVue = false;
+    onlineStart(row.id, me != null ? me : 0, row.version);
+    onlineShow();
+  }).catch(olError);
+}
+function replay() { // « Rejouer » : même code, mêmes joueurs, nouveau dossier
+  const st = App.state;
+  const joueurs = st.players.map((p) => ({ id: p.id, nom: p.nom, kind: p.kind, niveau: p.niveau }));
+  const ng = E.nouvellePartie({ joueurs });
+  ng.online = st.online;
+  App.state = ng;
+  App.finVue = false;
+  App.sel = {};
+  apresChangement();
 }
 
-let reco = null;
-function reconnecter() {
-  clearTimeout(reco);
-  let saved = null;
-  try { saved = JSON.parse(sessionStorage.getItem('em-join') || 'null'); } catch (e) { /* ignoré */ }
-  if (!saved) return;
-  reco = setTimeout(async () => {
-    if (!App.coupe) return;
-    const ancien = App.client;
-    creerClient();
-    // Après reconnexion, on reprend automatiquement la même place.
-    const rappelSalon = App.client.rappels.salon;
-    App.client.rappels.salon = (seats, demarre) => {
-      rappelSalon(seats, demarre);
-      App.client.choisir(saved.pid);
-    };
-    try {
-      await App.client.connecter(saved.code);
-    } catch (e) {
-      App.client = ancien;
-      reconnecter();
-    }
-  }, 3000);
+// ---------- Plateau : détection côté téléphone ----------
+// Le plateau écrit régulièrement dans sa propre ligne (jeu « plateau », titre = code) : la ligne de la partie n'est jamais touchée,
+// donc aucun conflit avec les coups. Le téléphone cache la table tant que cette ligne change (< 30 s) et la réaffiche seul si le
+// plateau disparaît. Au 1er passage on note seulement la version : un reste d'une séance précédente ne compte pas.
+function platPoll() { return window.PLATEAU_POLL != null ? window.PLATEAU_POLL : 5000; }
+function platFresh() { return window.PLATEAU_FRESH != null ? window.PLATEAU_FRESH : 30000; }
+function platBeatMs() { return window.PLATEAU_BEAT != null ? window.PLATEAU_BEAT : 10000; }
+function platWatch(o) {
+  const P = (o.plat = { present: false, override: false, ver: null, seen: 0, timer: null, stopped: false });
+  const next = () => { if (ONL === o && !P.stopped) P.timer = setTimeout(tick, platPoll()); };
+  function tick() {
+    if (ONL !== o || P.stopped) return;
+    clearTimeout(P.timer);
+    if (document.hidden || !App.state || !App.state.online || !App.state.online.joined) { next(); return; }
+    EL.liste('plateau').then((rows) => {
+      if (ONL !== o || P.stopped) return;
+      let r = null;
+      const now = Date.now();
+      rows.forEach((x) => { if (x.titre === o.id) r = x; });
+      if (!r) { P.ver = null; P.seen = 0; }
+      else if (P.ver == null) P.ver = r.version;
+      else if (r.version !== P.ver) { P.ver = r.version; P.seen = now; }
+      const pres = !!r && P.seen > 0 && now - P.seen < platFresh();
+      if (pres !== P.present) {
+        P.present = pres;
+        if (!pres) P.override = false;
+        if (App.screen === 'game') render();
+      }
+    }).catch(() => { /* réseau : on garde l'état connu */ }).then(next);
+  }
+  tick();
+}
+
+// ---------- Plateau : affichage seul (iPad commun) ----------
+function plStop() {
+  const o = PL;
+  if (!o) return;
+  if (o.watch) o.watch.stop();
+  clearInterval(o.timer);
+  clearTimeout(o.t2);
+  if (o.rowId) EL.supprimer(o.rowId).catch(() => { /* la ligne vieillira toute seule */ });
+  PL = null;
+  App.off = false;
+}
+function plBeat() {
+  const o = PL;
+  if (!o || o.busy) return;
+  o.busy = true;
+  const data = { code: o.id, t: Date.now() };
+  let p;
+  if (o.rowId) {
+    p = EL.ecrire(o.rowId, o.rowVer, data, o.id).then((nv) => {
+      if (nv) { o.rowVer = nv; return; }
+      return EL.lire(o.rowId).then((row) => { if (row) o.rowVer = row.version; else o.rowId = null; });
+    });
+  } else {
+    p = EL.liste('plateau').then((rows) => {
+      let r = null;
+      rows.forEach((x) => { if (x.titre === o.id) r = x; });
+      if (r) { o.rowId = r.id; o.rowVer = r.version; return; }
+      return EL.creer('plateau', data, o.id).then((x) => { o.rowId = x.id; o.rowVer = x.version; });
+    });
+  }
+  p.catch(() => { /* hors ligne : le prochain battement réessaiera */ }).then(() => {
+    o.busy = false;
+    if (PL !== o && o.rowId) EL.supprimer(o.rowId).catch(() => {});
+  });
+}
+function plRemote() {
+  const o = PL;
+  if (!o) return;
+  return EL.lire(o.id).then((row) => {
+    if (PL !== o || !row || row.version <= o.version) return;
+    App.state = row.etat;
+    o.version = row.version;
+    render();
+  });
+}
+function plStatus(st) {
+  if (!PL) return;
+  if (st === 'supprimee') { goHome(); olOpen(); olMsg('Cette partie a été supprimée.'); return; }
+  if (st === 'auth') { goHome(); olOpen(); olError({ kind: 'auth' }); return; }
+  App.off = st === 'hors-ligne';
+  render();
+}
+function plateauStart(code) {
+  code = (code || '').trim().toUpperCase();
+  if (code.length !== 4) { olMsg('Le code a 4 lettres.'); return; }
+  olMsg('');
+  EL.lire(code).then((row) => {
+    if (!row || row.jeu !== JEU) { olMsg('Code inconnu.'); return; }
+    onlineStop();
+    plStop();
+    clearTimeout(aiTimer);
+    App.state = row.etat;
+    App.mode = null;
+    App.modal = null;
+    App.screen = 'plateau';
+    const o = (PL = { id: code, version: row.version, watch: null, rowId: null, rowVer: 0, timer: null, t2: null, busy: false });
+    render();
+    o.watch = EL.surveiller(code, () => (PL ? PL.version : 0), plRemote, plStatus);
+    plBeat();
+    o.t2 = setTimeout(plBeat, 1500);
+    o.timer = setInterval(plBeat, platBeatMs());
+  }).catch(olError);
 }
 
 // ---------- Événements ----------
@@ -409,33 +535,28 @@ document.addEventListener('click', (ev) => {
   if (!el || el.disabled) return;
   const act = el.dataset.act;
   const seatEl = el.closest('[data-seat]');
-  const seatPid = (seatEl && seatEl.dataset.seat) || (App.mode === 'client' && App.view ? App.view.you : null) || (App.state ? E.acteurCourant(App.state) : null);
-  const acteur = App.mode === 'client' ? (App.view && App.view.you) : App.state && E.acteurCourant(App.state);
+  const seatPid = (seatEl && seatEl.dataset.seat) || curPid() || (App.state ? E.acteurCourant(App.state) : null);
+  const val = (id) => ((document.getElementById(id) || {}).value || '').trim();
 
   switch (act) {
     // navigation
-    case 'toMenu':
-      clearTimeout(aiTimer);
-      clearTimeout(reco);
-      if (App.host) { App.host.fermer(); App.host = null; }
-      if (App.client && App.client.conn) { try { App.client.conn.close(); } catch (e) { /* ignoré */ } }
-      App.client = null;
-      App.coupe = false;
-      App.modal = null;
-      App.screen = 'menu';
+    case 'toMenu': goHome(); return;
+    case 'toSetup':
+      App.cfg = defautCfg(el.dataset.mode || App.cfg.mode);
+      App.cfg.roles.corail.nom = lire('em-nom') || 'Corail';
+      App.screen = 'setup';
       break;
-    case 'toSetup': App.screen = 'setup'; break;
-    case 'toJoin': App.screen = 'join'; App.join = { etape: 'code', code: '', seats: [], erreur: '' }; break;
+    case 'toOnline': olOpen(); return;
     case 'openRules':
       if (App.screen !== 'game') { $app.insertAdjacentHTML('beforeend', UI.reglesHTML()); return; }
       App.modal = { kind: 'rules' };
       break;
     case 'resume': {
       try {
-        const s = JSON.parse(localStorage.getItem(SAVE_KEY));
+        const s = JSON.parse(lire(SAVE_KEY));
+        if (!s || s.mode === 'face' || s.mode === 'tel' || (s.mode === 'passe' && s.state.players.filter((p) => p.kind === 'humain').length !== 1)) throw new Error('ancien mode');
         App.state = s.state;
-        App.mode = s.mode;
-        App.unlocked = null;
+        App.mode = 'solo';
         App.finVue = false;
         App.screen = 'game';
         render();
@@ -443,19 +564,44 @@ document.addEventListener('click', (ev) => {
         return;
       } catch (e) {
         effacerSauvegarde();
-        toast('Sauvegarde illisible.');
+        toast('Sauvegarde illisible ou d’un ancien mode.');
       }
       break;
     }
     // configuration
-    case 'setMode': App.cfg.mode = el.dataset.v; break;
-    case 'setRole': App.cfg.roles[el.dataset.id].role = el.dataset.v; break;
+    case 'setRole': {
+      const id = el.dataset.id, v = el.dataset.v;
+      if (v === 'moi' || v === 'invite') {
+        for (const s of SUSPECTS) if (App.cfg.roles[s.id].role === v) App.cfg.roles[s.id].role = 'ia';
+      }
+      App.cfg.roles[id].role = v;
+      break;
+    }
     case 'setLvl': App.cfg.roles[el.dataset.id].niveau = Number(el.dataset.v); break;
     case 'startGame':
-      if (App.cfg.mode === 'tel') { ouvrirSalon(); return; }
-      demarrerPartie(App.cfg.mode);
+      if (App.cfg.mode === 'online') { onlineCreate(); return; }
+      demarrerSolo();
       return;
-    case 'launchTel': lancerTel(); return;
+    // en ligne
+    case 'olLogin':
+      EL.login(val('olEmail'), val('olPwd')).then(() => { App.ol.msg = ''; olOpen(); }).catch((e) => {
+        olMsg(e && e.status === 400 ? 'E-mail ou mot de passe incorrect.' : e && e.kind === 'reseau' ? 'Pas de réseau.' : 'Connexion impossible.');
+      });
+      return;
+    case 'olLogout': EL.logout(); App.ol = { msg: '', list: null }; break;
+    case 'olJoin': {
+      const nom = val('nomInp');
+      if (nom) ecrire('em-nom', nom);
+      onlineJoin(val('codeInp'), nom);
+      return;
+    }
+    case 'olResume': onlineResume(el.dataset.id); return;
+    case 'olDel':
+      EL.supprimer(el.dataset.id).then(olList).catch(olError);
+      return;
+    case 'platStart': plateauStart(val('platInp')); return;
+    case 'toggleTable': if (ONL && ONL.plat) ONL.plat.override = !ONL.plat.override; break;
+    case 'replay': replay(); return;
     // jeu
     case 'roll': dispatch({ by: seatPid, type: 'roll' }); return;
     case 'passage': dispatch({ by: seatPid, type: 'passage' }); return;
@@ -463,12 +609,12 @@ document.addEventListener('click', (ev) => {
     case 'end': dispatch({ by: seatPid, type: 'end' }); return;
     case 'show': dispatch({ by: seatPid, type: 'show', card: el.dataset.card }); return;
     case 'moveRoom':
-      if (App.mode !== 'client' && !acteurHumain()) return;
-      dispatch({ by: acteur, type: 'move', dest: { room: el.dataset.room } });
+      if (E.acteurCourant(App.state) !== curPid()) return;
+      dispatch({ by: curPid(), type: 'move', dest: { room: el.dataset.room } });
       return;
     case 'moveCell':
-      if (App.mode !== 'client' && !acteurHumain()) return;
-      dispatch({ by: acteur, type: 'move', dest: { x: Number(el.dataset.x), y: Number(el.dataset.y) } });
+      if (E.acteurCourant(App.state) !== curPid()) return;
+      dispatch({ by: curPid(), type: 'move', dest: { x: Number(el.dataset.x), y: Number(el.dataset.y) } });
       return;
     case 'openSuggest': App.sel = {}; App.modal = { kind: 'suggest', pid: seatPid }; break;
     case 'openAccuse': App.sel = {}; App.modal = { kind: 'accuse', pid: seatPid }; break;
@@ -487,39 +633,24 @@ document.addEventListener('click', (ev) => {
       dispatch({ by: pid, type: 'accuse', s, a, p });
       return;
     }
-    case 'openCarnet': App.modal = { kind: 'carnet', pid: el.dataset.pid || seatPid }; break;
-    case 'openLog': App.modal = { kind: 'log', pid: seatPid }; break;
+    case 'openCarnet': App.modal = { kind: 'carnet', pid: curPid() }; break;
+    case 'openLog': App.modal = { kind: 'log', pid: curPid() }; break;
     case 'closeModal':
-      if (App.state && App.state.phase === 'over' || (App.view && App.view.phase === 'over')) App.finVue = true;
+      if (App.state && App.state.phase === 'over') App.finVue = true;
       App.modal = null;
       break;
     case 'toggleAide':
       App.aide = !App.aide;
-      try { localStorage.setItem('em-aide', App.aide ? '1' : '0'); } catch (e) { /* ignoré */ }
+      ecrire('em-aide', App.aide ? '1' : '0');
       break;
     case 'mark': {
-      const view = vueDe(App.modal.pid);
+      const view = curView();
       const marks = lireMarques(view);
       const next = UI.marqueSuivante(marks[el.dataset.key]);
       if (next) marks[el.dataset.key] = next; else delete marks[el.dataset.key];
       ecrireMarques(view, marks);
       break;
     }
-    case 'unlock': App.unlocked = E.acteurCourant(App.state); break;
-    // client
-    case 'doJoin': {
-      const code = (document.getElementById('codeInp') || {}).value || '';
-      if (!/^\d{4}$/.test(code)) { App.join.erreur = 'Le code comporte 4 chiffres.'; break; }
-      rejoindre(code);
-      return;
-    }
-    case 'claim': App.client.choisir(el.dataset.id); return;
-    // secours manuel
-    case 'manuelOffre': creerInvitation(); return;
-    case 'copyOffre': copier('manOffre'); return;
-    case 'manuelRep': validerReponse(); return;
-    case 'manuelJoin': repondreManuel(); return;
-    case 'copyRep': copier('manRep'); return;
     default: return;
   }
   render();
@@ -527,71 +658,17 @@ document.addEventListener('click', (ev) => {
 
 document.addEventListener('input', (ev) => {
   const el = ev.target;
-  if (el.classList && el.classList.contains('nameinp')) App.cfg.roles[el.dataset.id].nom = el.value;
+  if (el.classList && el.classList.contains('nameinp') && el.dataset.id) {
+    App.cfg.roles[el.dataset.id].nom = el.value;
+    if (App.cfg.roles[el.dataset.id].role === 'moi') ecrire('em-nom', el.value);
+  }
 });
 
-// Cartes cachées en face à face : visibles seulement pendant l'appui.
-document.addEventListener('pointerdown', (ev) => {
-  const b = ev.target.closest('[data-hold]');
-  if (b) b.closest('.hand').classList.add('revealed');
-});
-const cacher = () => document.querySelectorAll('.hand.revealed').forEach((h) => h.classList.remove('revealed'));
-document.addEventListener('pointerup', cacher);
-document.addEventListener('pointercancel', cacher);
-
-async function creerInvitation() {
-  const champ = document.getElementById('manOffre');
-  if (champ) champ.value = '';
-  const rep = document.getElementById('manRep');
-  if (rep) rep.value = '';
-  try {
-    const { texte, manuel } = await App.host.creerInvitation();
-    App.salon.manuel = manuel;
-    document.getElementById('manOffre').value = texte;
-  } catch (e) {
-    toast('Invitation impossible : ' + (e.message || e));
-  }
-}
-async function validerReponse() {
-  try {
-    await App.host.validerReponse(App.salon.manuel, document.getElementById('manRep').value);
-    toast('Réponse validée, connexion en cours…');
-  } catch (e) {
-    toast('Réponse invalide.');
-  }
-}
-async function repondreManuel() {
-  try {
-    creerClient();
-    const rep = await App.client.repondreInvitation(document.getElementById('manOffre').value);
-    document.getElementById('manRep').value = rep;
-    toast('Copie la réponse vers l’iPad.');
-  } catch (e) {
-    toast('Invitation invalide.');
-  }
-}
-function copier(id) {
-  const t = document.getElementById(id);
-  if (!t) return;
-  t.select();
-  try {
-    navigator.clipboard.writeText(t.value);
-    toast('Copié.');
-  } catch (e) {
-    document.execCommand('copy');
-  }
-}
+window.addEventListener('offline', () => { if (ONL) onStatus('hors-ligne'); });
+window.addEventListener('online', () => { if (ONL && ONL.watch) ONL.watch.poke(); });
 
 // ---------- Démarrage ----------
-const params = new URLSearchParams(location.search);
-if (params.get('join')) {
-  App.screen = 'join';
-  App.join = { etape: 'code', code: params.get('join'), seats: [], erreur: '' };
-  render();
-  rejoindre(params.get('join'));
-} else {
-  render();
-}
+render();
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }

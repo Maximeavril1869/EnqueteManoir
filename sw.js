@@ -1,9 +1,9 @@
-// Service worker : le jeu fonctionne hors ligne (hors mode téléphones qui a besoin du réseau local/internet).
-const VERSION = 'em-v1';
+// Service worker : le jeu fonctionne hors ligne (le mode En ligne a besoin d'internet).
+const VERSION = 'em-v2';
 const FICHIERS = [
   './', 'index.html', 'manifest.webmanifest', 'css/style.css',
-  'js/main.js', 'js/ui.js', 'js/engine.js', 'js/data.js', 'js/ai.js', 'js/knowledge.js', 'js/net.js',
-  'js/vendor/peerjs.min.js', 'js/vendor/qrcode.js',
+  'js/main.js', 'js/ui.js', 'js/engine.js', 'js/data.js', 'js/ai.js', 'js/knowledge.js',
+  'en-ligne.js',
   'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
 self.addEventListener('install', (e) => {

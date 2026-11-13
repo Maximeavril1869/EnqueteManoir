@@ -4,7 +4,7 @@ Journal des opérations réalisées sur le projet, pour reprendre le travail là
 
 ## État actuel
 
-Version **1.0** livrée : jeu complet jouable (3 modes, 3 niveaux d'ordi, carnet avec aide), documentation, tests.
+Version **2.0** livrée (13 novembre 2026) : solo + mode En ligne (2 humains) + plateau iPad ; anciens modes passe-passe / face à face / téléphones PeerJS supprimés.
 Points à valider par le propriétaire sur de vrais appareils : voir « À faire ».
 
 ## Décisions prises avec le propriétaire (10 novembre 2026)
@@ -13,7 +13,7 @@ Points à valider par le propriétaire sur de vrais appareils : voir « À faire
 - 2 à 6 joueurs, règles du jeu d'enquête classique, manoir classique, carnet de déduction intégré avec aide automatique.
 - Tous les modes : passe-passe, face à face, téléphones, ordi à plusieurs niveaux (comme ses autres jeux).
 - Mention « Tous droits réservés » (fichier `LICENSE` + section Licence du README).
-- Mode téléphones : liaison WebRTC directe, avec secours manuel (confiance accordée avant tout test réel).
+- (v1.0, abandonné en v2.0) Mode téléphones : liaison WebRTC directe, avec secours manuel.
 
 ## Journal
 
@@ -33,9 +33,23 @@ Points à valider par le propriétaire sur de vrais appareils : voir « À faire
 12. Corrections trouvées pendant les tests : conservation des champs de saisie du salon entre deux rendus ; vidage du champ d'invitation avant d'en créer une nouvelle ; messages d'erreur du courtier traduits en français ; plateau de téléphone agrandi et centré sur le pion ; **plateau rendu cliquable uniquement quand c'est à un humain de jouer** (auparavant, un tap pendant le tour de l'ordi pouvait déplacer le pion de l'ordi).
 13. Documentation : `README.md`, `ARCHITECTURE.md`, `LICENSE`.
 
+### 13 novembre 2026 — v2.0 : mode « En ligne » et plateau
+
+Décisions (avec le propriétaire) : 2 humains obligatoires en ligne, un appareil chacun ; autres places ordi ou absentes ; un seul humain n'a pas de sens en ligne (le solo existe) ; mains et dossier cachés « par confiance » ; plateau iPad en lecture seule, personne ne joue dessus ; avec plateau, le téléphone cache la table commune mais le mini-plateau reste pour choisir sa case ; solo local conservé.
+
+1. Ajout de `en-ligne.js` (copie identique de celle des autres jeux, Supabase projet plan-du-jour, table `parties`).
+2. Suppression de `js/net.js`, `js/vendor/` (PeerJS, qrcode), `tests/net.test.mjs`, et des modes passe-passe / face à face / téléphones.
+3. `js/main.js` réécrit : solo (sauvegarde locale) ; en ligne (création, rejoindre par code, reprise, suppression, Rejouer, écriture optimiste, conflit = l'état distant l'emporte) ; l'hôte seul joue les ordinateurs ; plateau (lecture seule, signe de vie dans une ligne `jeu='plateau'`) et détection côté téléphone (classe « table masquée », bouton manuel).
+4. `js/ui.js` : menu, réglage (rôles Moi / Invité / Ordi / Absent), écran En ligne, attente, historique public des suggestions, écran de fin (Rejouer), suppression du mode « maintenir pour voir ».
+5. `engine.js` inchangé. Ancienne sauvegarde passe-passe à un seul humain reprise comme solo ; les autres anciennes sauvegardes sont écartées.
+6. Tests : `npm test` (13 tests, dont 2 sur l'absence de fuite dans la vue publique) ; test navigateur `tests/e2e/en_ligne.py` (53 vérifications : 2 appareils, conflit, plateau, coupure réseau, reprise, intrus, accusation + Rejouer, suppression, solo).
+7. `sw.js` : cache `em-v2`, jamais de cache des requêtes vers un autre site.
+
 ## À faire / à valider
 
 - [ ] Activer GitHub Pages sur le dépôt (branche `main`, dossier racine) si ce n'est pas déjà fait.
-- [ ] Tester le mode téléphones sur de vrais appareils (iPad + iPhone, même wifi) : code à 4 chiffres, QR code, reprise après déconnexion. Non testé ici : le courtier PeerJS est inaccessible depuis l'environnement de développement.
-- [ ] Vérifier le ressenti du plateau sur iPad (taille des cases, lisibilité en face à face).
-- [ ] Idées non réalisées : animation des déplacements, sons, historique détaillé des suggestions dans le carnet, relier le mode téléphone aux autres jeux.
+- [ ] Tester le mode En ligne sur de vrais appareils (2 téléphones, puis avec l'iPad en plateau) : création, rejoindre, plateau détecté, déplacement, réfutation secrète, Rejouer.
+- [ ] Vérifier avec le vrai Supabase que la table accepte `jeu='plateau'` (sinon les téléphones gardent la table affichée).
+- [ ] Vérifier le ressenti du plateau sur iPad (taille des cases, lisibilité).
+- [ ] Limite connue : si l'application de l'hôte est fermée, les ordinateurs ne jouent plus.
+- [ ] Idées non réalisées : animation des déplacements, sons, historique détaillé des suggestions dans le carnet.
