@@ -53,3 +53,7 @@ Décisions (avec le propriétaire) : 2 humains obligatoires en ligne, un apparei
 - [ ] Vérifier le ressenti du plateau sur iPad (taille des cases, lisibilité).
 - [ ] Limite connue : si l'application de l'hôte est fermée, les ordinateurs ne jouent plus.
 - [ ] Idées non réalisées : animation des déplacements, sons, historique détaillé des suggestions dans le carnet.
+
+## 2026-11-14 — v2.1 : adaptation à l'iPhone 16e (390 × ~664 utiles)
+1. Plateau limité à 44 % de la hauteur sur petit écran ; barre d'actions collée en bas : les boutons restent visibles sans défiler.
+2. Cache du service worker `em-v3`. Tests solo/en ligne OK (53 vérifications).

@@ -1,5 +1,5 @@
 // Service worker : le jeu fonctionne hors ligne (le mode En ligne a besoin d'internet).
-const VERSION = 'em-v2';
+const VERSION = 'em-v3';
 const FICHIERS = [
   './', 'index.html', 'manifest.webmanifest', 'css/style.css',
   'js/main.js', 'js/ui.js', 'js/engine.js', 'js/data.js', 'js/ai.js', 'js/knowledge.js',

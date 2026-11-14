@@ -163,3 +163,9 @@ table.carnet { border-collapse: collapse; width: 100%; font-size: .9rem; }
 
 .code { font-size: 3.4rem; letter-spacing: .25em; font-weight: 800; color: var(--gold2); font-family: ui-monospace, Menlo, monospace; }
 .topbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+
+/* Petit écran (iPhone 16e : 390 × ~664 utiles dans Safari) : plateau plus bas, boutons d'action toujours visibles */
+@media (max-width: 520px) {
+  .fitboard .board, .boardwrap .board { height: 44dvh; width: auto; max-width: 100%; max-height: none; aspect-ratio: 24 / 25; margin: 0 auto; display: block; }
+  .seat .actions { position: sticky; bottom: 0; z-index: 5; background: var(--panel); padding: 8px 0 6px; border-top: 1px solid var(--line); }
+}
