@@ -57,3 +57,8 @@ Décisions (avec le propriétaire) : 2 humains obligatoires en ligne, un apparei
 ## 2026-11-14 — v2.1 : adaptation à l'iPhone 16e (390 × ~664 utiles)
 1. Plateau limité à 44 % de la hauteur sur petit écran ; barre d'actions collée en bas : les boutons restent visibles sans défiler.
 2. Cache du service worker `em-v3`. Tests solo/en ligne OK (53 vérifications).
+
+## 2026-11-14 — livraison v4 : marge haute iPhone + correctif de cache
+1. En-tête descendu sous la zone floutée d'iOS (iPhone, appli installée) : marge haute supplémentaire (même principe que 5 Rois v15, à valider sur l'appareil de l'auteur).
+2. Cache : fichiers versionnés `?v=4` dans index.html et sw.js, installation du service worker avec `cache: 'reload'`, requêtes avec `cache: 'no-cache'`, réseau d'abord puis cache hors ligne. Version et nom du cache incrémentés ensemble.
+3. Tests e2e OK.

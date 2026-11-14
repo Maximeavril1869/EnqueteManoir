@@ -12,7 +12,7 @@
 }
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--txt); font-family: -apple-system, 'SF Pro Text', system-ui, sans-serif; touch-action: manipulation; overscroll-behavior: none; }
-body { padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+body { padding: calc(env(safe-area-inset-top) + 28px) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
 #app { height: 100%; }
 h1, h2, h3, h4 { font-family: Georgia, 'Times New Roman', serif; margin: .3em 0; }
 button { font: inherit; color: inherit; cursor: pointer; }
